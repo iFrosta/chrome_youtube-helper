@@ -145,7 +145,9 @@ let run = async () => {
                 closeButton.style.textAlign = 'center' // Horizontally center the 'X'
                 closeButton.style.cursor = 'pointer'
                 closeButton.style.borderRadius = '50%'
-                closeButton.onclick = () => {
+                closeButton.onclick = (event) => {
+                    event.stopPropagation()
+
                     video.style.display = 'none'
                     localStorage.setItem(getName(videoLink), JSON.stringify({ time: currentTime, value: true }))
                 }
