@@ -18,8 +18,9 @@
         }
     ],
     "action": {
+        "default_popup": "popup.html",
         "default_icons": {
-            "128": "assets/icons/icon.png"
+            "128": "assets/icon.png"
         }
     },
     "permissions": [

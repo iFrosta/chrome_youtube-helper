@@ -18,7 +18,10 @@
         processedVideos: new WeakSet(),
         isProcessing: false,
         mutationQueue: [],
-        stats: { removed: 0, blacklisted: 0, shorts: 0 }
+        stats: { removed: 0, blacklisted: 0, shorts: 0 },
+        manualSpeedChange: false,
+        extensionPaused: false,
+        lastKnownSpeed: CONFIG.SPEED
     };
 
     // Initialize
@@ -95,7 +98,7 @@
 
     // Main processing function
     async function processPage() {
-        if (state.isProcessing) return;
+        if (state.isProcessing || state.extensionPaused) return;
         state.isProcessing = true;
 
         try {
@@ -278,14 +281,22 @@
         const video = document.querySelector('video.html5-main-video');
 
         if (video) {
-            video.playbackRate = CONFIG.SPEED;
+            // Only set speed if no manual change has been made and extension is not paused
+            if (!state.manualSpeedChange && !state.extensionPaused) {
+                video.playbackRate = CONFIG.SPEED;
+                state.lastKnownSpeed = CONFIG.SPEED;
+            }
 
-            // Listen for rate changes and enforce our speed
+            // Listen for rate changes to detect manual changes
             if (!video.hasAttribute('data-speed-set')) {
                 video.setAttribute('data-speed-set', 'true');
                 video.addEventListener('ratechange', () => {
-                    if (video.playbackRate !== CONFIG.SPEED) {
-                        video.playbackRate = CONFIG.SPEED;
+                    // If the speed was changed to something other than our config speed
+                    // and we didn't just set it, mark as manual change
+                    if (video.playbackRate !== state.lastKnownSpeed && 
+                        video.playbackRate !== CONFIG.SPEED) {
+                        state.manualSpeedChange = true;
+                        console.log(`[YT Helper] Manual speed change detected: ${video.playbackRate}x`);
                     }
                 });
             }
@@ -339,9 +350,32 @@
 
             setSpeed: (speed) => {
                 CONFIG.SPEED = speed;
+                state.manualSpeedChange = false; // Reset manual change flag
+                state.lastKnownSpeed = speed;
                 setPlaybackSpeed();
                 console.log(`[YT Helper] Speed set to ${speed}x`);
             },
+
+            resetSpeedControl: () => {
+                state.manualSpeedChange = false;
+                setPlaybackSpeed();
+                console.log('[YT Helper] Speed control reset');
+            },
+
+            pauseExtension: () => {
+                state.extensionPaused = true;
+                console.log('[YT Helper] Extension paused for this page');
+            },
+
+            resumeExtension: () => {
+                state.extensionPaused = false;
+                processPage();
+                console.log('[YT Helper] Extension resumed');
+            },
+
+            isPaused: () => state.extensionPaused,
+
+            isSpeedManual: () => state.manualSpeedChange,
 
             exportBlacklist: () => {
                 const data = JSON.stringify([...state.blacklist], null, 2);
@@ -364,6 +398,20 @@
                     processPage();
                 } catch (e) {
                     console.error('[YT Helper] Import failed:', e);
+                }
+            },
+
+            processPage: () => {
+                processPage();
+                console.log('[YT Helper] Page processing triggered');
+            },
+
+            getConfig: () => ({ ...CONFIG }),
+
+            setConfig: (key, value) => {
+                if (CONFIG.hasOwnProperty(key)) {
+                    CONFIG[key] = value;
+                    console.log(`[YT Helper] Config ${key} set to ${value}`);
                 }
             }
         };
