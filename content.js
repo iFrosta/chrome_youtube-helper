@@ -28,12 +28,29 @@
     init();
 
     async function init() {
-        loadBlacklist();
-        setupObservers();
-        setPlaybackSpeed();
-        performInitialCleanup();
-        processPage();
-        setupGlobalFunctions();
+        try {
+            loadBlacklist();
+            
+            // Wait for page to be ready
+            if (document.readyState === 'loading') {
+                document.addEventListener('DOMContentLoaded', () => {
+                    setupObservers();
+                    processPage();
+                });
+            } else {
+                setupObservers();
+                // Give YouTube time to render
+                setTimeout(() => processPage(), 500);
+            }
+            
+            setPlaybackSpeed();
+            performInitialCleanup();
+            setupGlobalFunctions();
+            
+            console.log('[YT Helper] Initialized successfully');
+        } catch (e) {
+            console.error('[YT Helper] Initialization error:', e);
+        }
     }
 
     // Load blacklist from localStorage
@@ -72,7 +89,8 @@
             }, CONFIG.DEBOUNCE_DELAY);
         });
 
-        const targetNode = document.querySelector('ytd-page-manager') || document.body;
+        // Try multiple possible container elements
+        const targetNode = document.querySelector('ytd-page-manager, ytd-app, #content') || document.body;
         observer.observe(targetNode, {
             childList: true,
             subtree: true,
@@ -94,6 +112,24 @@
             }
             lastScrollY = window.scrollY;
         }, { passive: true });
+
+        // Listen for YouTube navigation (SPA)
+        let lastUrl = location.href;
+        new MutationObserver(() => {
+            const url = location.href;
+            if (url !== lastUrl) {
+                lastUrl = url;
+                console.log('[YT Helper] Navigation detected, processing page...');
+                setTimeout(() => {
+                    if (!state.isProcessing) {
+                        processPage();
+                    }
+                }, 500);
+            }
+        }).observe(document.querySelector('ytd-app') || document.body, {
+            subtree: true,
+            childList: true
+        });
     }
 
     // Main processing function
@@ -102,6 +138,11 @@
         state.isProcessing = true;
 
         try {
+            const videoItems = document.querySelectorAll('ytd-rich-item-renderer');
+            if (videoItems.length > 0) {
+                console.log(`[YT Helper] Processing ${videoItems.length} video items...`);
+            }
+            
             removeShorts();
             removeWatchedVideos();
             processBlacklistButtons();
@@ -115,21 +156,28 @@
 
     // Remove Shorts sections and individual shorts
     function removeShorts() {
-        // Remove Shorts shelves
-        document.querySelectorAll('ytd-rich-section-renderer').forEach(section => {
-            const title = section.querySelector('#title')?.textContent?.trim().toLowerCase();
-            if (title === 'shorts' || title === 'youtube shorts') {
+        // Remove Shorts shelves (multiple possible structures)
+        document.querySelectorAll('ytd-rich-section-renderer, ytd-reel-shelf-renderer').forEach(section => {
+            const title = section.querySelector('#title, h2, [role="heading"]')?.textContent?.trim().toLowerCase();
+            if (title && (title.includes('shorts') || title.includes('short'))) {
                 section.remove();
                 state.stats.shorts++;
             }
         });
 
         // Remove individual Shorts in feed
-        document.querySelectorAll('ytd-rich-item-renderer').forEach(item => {
+        document.querySelectorAll('ytd-rich-item-renderer, ytd-reel-item-renderer').forEach(item => {
+            // Check multiple indicators for Shorts
             const isShort =
                 item.querySelector('[overlay-style="SHORTS"]') ||
                 item.querySelector('ytd-thumbnail-overlay-time-status-renderer')?.textContent?.includes('SHORTS') ||
-                item.querySelector('a[href*="/shorts/"]');
+                item.querySelector('a[href*="/shorts/"]') ||
+                item.querySelector('[aria-label*="Shorts"]') ||
+                item.querySelector('[title*="Shorts"]') ||
+                // Check for reel-specific classes
+                item.classList.contains('ytd-reel-item-renderer') ||
+                // Check if the lockup contains shorts indicator
+                item.querySelector('.yt-lockup-view-model')?.className?.includes('shorts');
 
             if (isShort) {
                 item.remove();
@@ -141,7 +189,14 @@
     // Remove videos watched over threshold
     function removeWatchedVideos() {
         document.querySelectorAll('ytd-rich-item-renderer').forEach(item => {
-            const progress = item.querySelector('#progress');
+            // Try multiple selectors for progress indicator
+            let progress = item.querySelector('#progress');
+            
+            // Fallback: look for progress in thumbnail overlays
+            if (!progress) {
+                progress = item.querySelector('ytd-thumbnail-overlay-resume-playback-renderer #progress, [id*="progress"]');
+            }
+            
             if (progress) {
                 const width = parseFloat(progress.style.width);
                 if (width > CONFIG.OVERFLOW) {
@@ -154,7 +209,14 @@
 
     // Extract video ID from various YouTube URL formats
     function extractVideoId(element) {
-        const link = element.querySelector('a#thumbnail, a.yt-simple-endpoint');
+        // Try new structure first (yt-lockup-view-model)
+        let link = element.querySelector('a.yt-lockup-view-model__content-image');
+        
+        // Fallback to old structure
+        if (!link) {
+            link = element.querySelector('a#thumbnail, a.yt-simple-endpoint, a[href*="/watch"]');
+        }
+        
         if (!link) return null;
 
         const href = link.getAttribute('href');
@@ -188,22 +250,29 @@
             // Skip if already blacklisted
             if (state.blacklist.has(videoId)) return;
 
-            const dismissible = item.querySelector('#dismissible');
-            if (!dismissible || dismissible.querySelector('.yt-helper-remove')) return;
+            // Check if button already exists
+            if (item.querySelector('.yt-helper-remove')) return;
 
             const button = createBlacklistButton(videoId, item);
 
-            // Find the best position for the button
-            const thumbnail = item.querySelector('#thumbnail');
-            if (thumbnail) {
-                thumbnail.style.position = 'relative';
-                thumbnail.appendChild(button);
-            } else {
-                dismissible.style.position = 'relative';
-                dismissible.appendChild(button);
+            // Find the best position for the button (try new structure first)
+            let container = item.querySelector('a.yt-lockup-view-model__content-image');
+            
+            // Fallback to old structure
+            if (!container) {
+                container = item.querySelector('#thumbnail');
+            }
+            
+            // Last resort: use #dismissible or #content
+            if (!container) {
+                container = item.querySelector('#dismissible, #content');
             }
 
-            state.processedVideos.add(item);
+            if (container) {
+                container.style.position = 'relative';
+                container.appendChild(button);
+                state.processedVideos.add(item);
+            }
         });
     }
 
