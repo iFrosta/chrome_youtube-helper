@@ -9,92 +9,60 @@
 <body>
     <div class="container">
         <header class="header">
-            <h1>🎬 YouTube Helper</h1>
+            <h1>YouTube Helper</h1>
         </header>
 
         <main class="content">
             <!-- Extension Status -->
             <section class="status-section">
                 <div class="status-item">
-                    <span class="status-label">Extension Status:</span>
-                    <span id="extension-status" class="status-value">Active</span>
+                    <span class="status-label">Status</span>
+                    <span id="extension-status" class="status-badge active">Active</span>
                 </div>
-                <button id="toggle-extension" class="btn btn-primary">Pause for this page</button>
+                <button id="toggle-extension" class="btn btn-secondary">Pause for this page</button>
             </section>
 
-            <!-- Speed Control -->
-            <section class="control-section">
-                <h3>🎯 Speed Control</h3>
-                <div class="speed-controls">
-                    <div class="speed-input-group">
-                        <label for="speed-input">Playback Speed:</label>
-                        <input type="number" id="speed-input" min="0.25" max="4" step="0.25" value="1.75">
-                        <span class="speed-unit">x</span>
-                    </div>
-                    <div class="speed-presets">
-                        <button class="speed-btn" data-speed="1">1x</button>
-                        <button class="speed-btn" data-speed="1.25">1.25x</button>
-                        <button class="speed-btn" data-speed="1.5">1.5x</button>
-                        <button class="speed-btn" data-speed="1.75">1.75x</button>
-                        <button class="speed-btn" data-speed="2">2x</button>
-                    </div>
-                    <div class="speed-status">
-                        <span id="speed-status">Auto-control enabled</span>
-                        <button id="reset-speed" class="btn btn-secondary">Reset Speed Control</button>
-                    </div>
-                </div>
+            <!-- What's hidden -->
+            <section>
+                <h3>Hidden on YouTube</h3>
+                <ul class="features-list">
+                    <li>Shorts (sections &amp; individual items)</li>
+                    <li>Home feed recommendations</li>
+                    <li>Watch page sidebar suggestions</li>
+                    <li>Home button in sidebar</li>
+                    <li>Blacklisted videos</li>
+                </ul>
             </section>
 
             <!-- Statistics -->
-            <section class="stats-section">
-                <h3>📊 Statistics</h3>
+            <section>
+                <h3>Statistics</h3>
                 <div class="stats-grid">
                     <div class="stat-item">
-                        <span class="stat-number" id="removed-count">0</span>
-                        <span class="stat-label">Watched Removed</span>
-                    </div>
-                    <div class="stat-item">
-                        <span class="stat-number" id="shorts-count">0</span>
-                        <span class="stat-label">Shorts Removed</span>
-                    </div>
-                    <div class="stat-item">
                         <span class="stat-number" id="blacklisted-count">0</span>
-                        <span class="stat-label">Blacklisted</span>
+                        <span class="stat-label">Blacklisted this session</span>
                     </div>
                     <div class="stat-item">
                         <span class="stat-number" id="blacklist-total">0</span>
-                        <span class="stat-label">Total Blacklist</span>
+                        <span class="stat-label">Total in blacklist</span>
                     </div>
                 </div>
             </section>
 
             <!-- Blacklist Management -->
-            <section class="blacklist-section">
-                <h3>🚫 Blacklist Management</h3>
+            <section>
+                <h3>Blacklist</h3>
                 <div class="blacklist-controls">
-                    <button id="export-blacklist" class="btn btn-secondary">Export Blacklist</button>
-                    <button id="import-blacklist" class="btn btn-secondary">Import Blacklist</button>
+                    <button id="export-blacklist" class="btn btn-secondary">Export</button>
+                    <button id="import-blacklist" class="btn btn-secondary">Import</button>
                     <button id="clear-blacklist" class="btn btn-danger">Clear All</button>
                 </div>
                 <input type="file" id="import-file" accept=".json" style="display: none;">
             </section>
-
-            <!-- Settings -->
-            <section class="settings-section">
-                <h3>⚙️ Settings</h3>
-                <div class="setting-item">
-                    <label for="overflow-threshold">Watched Video Threshold:</label>
-                    <input type="range" id="overflow-threshold" min="10" max="100" step="5" value="50">
-                    <span id="overflow-value">50%</span>
-                </div>
-            </section>
         </main>
 
         <footer class="footer">
-            <div class="footer-links">
-                <button id="refresh-stats" class="link-btn">Refresh Stats</button>
-                <button id="process-page" class="link-btn">Process Page</button>
-            </div>
+            <button id="process-page" class="link-btn">Re-process page</button>
         </footer>
     </div>
 

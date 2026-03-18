@@ -1,73 +1,98 @@
-(async () => {
+(() => {
     const CONFIG = {
-        OVERFLOW: 50,
-        SPEED: 1.75,
-        CLEANUP_INTERVAL: 500,
-        MAX_RETRIES: 50,
-        PROCESS_DELAY: 250,
-        STORAGE_PREFIX: 'ytHelper_',
         BLACKLIST_KEY: 'ytHelper_blacklist',
-        LAST_CLEANUP_KEY: 'ytHelper_lastCleanup',
-        CLEANUP_DAYS: 30,
-        DEBOUNCE_DELAY: 100
+        DEBOUNCE_DELAY: 150
     };
 
-    // State management
     const state = {
         blacklist: new Set(),
         processedVideos: new WeakSet(),
-        isProcessing: false,
-        mutationQueue: [],
-        stats: { removed: 0, blacklisted: 0, shorts: 0 },
-        manualSpeedChange: false,
         extensionPaused: false,
-        lastKnownSpeed: CONFIG.SPEED
+        stats: { shorts: 0, blacklisted: 0 }
     };
 
-    // Initialize
     init();
 
-    async function init() {
+    function init() {
         try {
             loadBlacklist();
-            
-            // Wait for page to be ready
-            if (document.readyState === 'loading') {
-                document.addEventListener('DOMContentLoaded', () => {
-                    setupObservers();
-                    processPage();
-                });
-            } else {
-                setupObservers();
-                // Give YouTube time to render
-                setTimeout(() => processPage(), 500);
-            }
-            
-            setPlaybackSpeed();
-            performInitialCleanup();
+            injectStyles();
+            setupObserver();
+            setupNavigationDetection();
+            processBlacklist();
             setupGlobalFunctions();
-            
-            console.log('[YT Helper] Initialized successfully');
+            console.log('[YT Helper] Initialized');
         } catch (e) {
-            console.error('[YT Helper] Initialization error:', e);
+            console.error('[YT Helper] Init error:', e);
         }
     }
 
-    // Load blacklist from localStorage
+    function injectStyles() {
+        const style = document.createElement('style');
+        style.id = 'yt-helper-styles';
+        style.textContent = `
+            /* Hide Shorts sections and items */
+            ytd-rich-section-renderer,
+            ytd-reel-shelf-renderer,
+            ytd-reel-item-renderer { display: none !important; }
+
+            ytd-rich-item-renderer:has(a[href*="/shorts/"]),
+            ytd-rich-item-renderer:has([overlay-style="SHORTS"]) { display: none !important; }
+
+            /* Hide home page recommendations feed (JS adds .yt-helper-home to body) */
+            body.yt-helper-home ytd-rich-grid-renderer { display: none !important; }
+
+            /* Hide watch page sidebar recommendations */
+            ytd-watch-next-secondary-results-renderer { display: none !important; }
+
+            /* Hide videos with a watch progress bar (already watched) */
+            ytd-rich-item-renderer:has(ytd-thumbnail-overlay-resume-playback-renderer),
+            ytd-rich-item-renderer:has(yt-thumbnail-overlay-progress-bar-view-model) { display: none !important; }
+
+            /* Hide Home and Shorts nav buttons in sidebar */
+            ytd-guide-entry-renderer:has(a[href="/"]),
+            ytd-guide-entry-renderer:has(a[title="Shorts"]),
+            ytd-mini-guide-entry-renderer:has(a[href="/"]),
+            ytd-mini-guide-entry-renderer:has(a[title="Shorts"]) { display: none !important; }
+
+            /* Blacklist button */
+            .yt-helper-remove {
+                position: absolute;
+                top: 8px;
+                right: 8px;
+                width: 28px;
+                height: 28px;
+                background: rgba(205, 24, 24, 0.85);
+                color: white;
+                border: none;
+                border-radius: 50%;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                cursor: pointer;
+                z-index: 10;
+                font-size: 14px;
+                font-weight: bold;
+                transition: background 0.15s, transform 0.15s;
+                box-shadow: 0 2px 4px rgba(0,0,0,0.3);
+            }
+            .yt-helper-remove:hover {
+                background: rgba(205, 24, 24, 1);
+                transform: scale(1.1);
+            }
+        `;
+        document.head.appendChild(style);
+    }
+
     function loadBlacklist() {
         try {
             const stored = localStorage.getItem(CONFIG.BLACKLIST_KEY);
-            if (stored) {
-                const ids = JSON.parse(stored);
-                state.blacklist = new Set(ids);
-            }
+            if (stored) state.blacklist = new Set(JSON.parse(stored));
         } catch (e) {
-            console.error('[YT Helper] Failed to load blacklist:', e);
             state.blacklist = new Set();
         }
     }
 
-    // Save blacklist to localStorage
     function saveBlacklist() {
         try {
             localStorage.setItem(CONFIG.BLACKLIST_KEY, JSON.stringify([...state.blacklist]));
@@ -76,55 +101,29 @@
         }
     }
 
-    // Setup mutation observer with debouncing
-    function setupObservers() {
+    function setupObserver() {
         let debounceTimer;
-
-        const observer = new MutationObserver((mutations) => {
+        const observer = new MutationObserver(() => {
             clearTimeout(debounceTimer);
-            debounceTimer = setTimeout(() => {
-                if (!state.isProcessing) {
-                    processPage();
-                }
-            }, CONFIG.DEBOUNCE_DELAY);
+            debounceTimer = setTimeout(processBlacklist, CONFIG.DEBOUNCE_DELAY);
         });
+        const target = document.querySelector('ytd-page-manager, ytd-app') || document.body;
+        observer.observe(target, { childList: true, subtree: true });
+    }
 
-        // Try multiple possible container elements
-        const targetNode = document.querySelector('ytd-page-manager, ytd-app, #content') || document.body;
-        observer.observe(targetNode, {
-            childList: true,
-            subtree: true,
-            attributes: false
-        });
+    function updateHomeClass() {
+        const isHome = location.pathname === '/' || location.pathname === '';
+        document.body.classList.toggle('yt-helper-home', isHome);
+    }
 
-        // Scroll handler with throttling
-        let scrollTimer;
-        let lastScrollY = window.scrollY;
-
-        window.addEventListener('scroll', () => {
-            if (window.scrollY > lastScrollY) {
-                clearTimeout(scrollTimer);
-                scrollTimer = setTimeout(() => {
-                    if (!state.isProcessing) {
-                        processPage();
-                    }
-                }, CONFIG.PROCESS_DELAY);
-            }
-            lastScrollY = window.scrollY;
-        }, { passive: true });
-
-        // Listen for YouTube navigation (SPA)
+    function setupNavigationDetection() {
+        updateHomeClass();
         let lastUrl = location.href;
         new MutationObserver(() => {
-            const url = location.href;
-            if (url !== lastUrl) {
-                lastUrl = url;
-                console.log('[YT Helper] Navigation detected, processing page...');
-                setTimeout(() => {
-                    if (!state.isProcessing) {
-                        processPage();
-                    }
-                }, 500);
+            if (location.href !== lastUrl) {
+                lastUrl = location.href;
+                updateHomeClass();
+                setTimeout(processBlacklist, 500);
             }
         }).observe(document.querySelector('ytd-app') || document.body, {
             subtree: true,
@@ -132,320 +131,89 @@
         });
     }
 
-    // Main processing function
-    async function processPage() {
-        if (state.isProcessing || state.extensionPaused) return;
-        state.isProcessing = true;
-
-        try {
-            const videoItems = document.querySelectorAll('ytd-rich-item-renderer');
-            if (videoItems.length > 0) {
-                console.log(`[YT Helper] Processing ${videoItems.length} video items...`);
-            }
-            
-            removeShorts();
-            removeWatchedVideos();
-            processBlacklistButtons();
-            removeBlacklistedVideos();
-        } catch (e) {
-            console.error('[YT Helper] Processing error:', e);
-        } finally {
-            state.isProcessing = false;
-        }
+    function processBlacklist() {
+        if (state.extensionPaused) return;
+        removeBlacklistedVideos();
+        addBlacklistButtons();
     }
 
-    // Remove Shorts sections and individual shorts
-    function removeShorts() {
-        // Remove Shorts shelves (multiple possible structures)
-        document.querySelectorAll('ytd-rich-section-renderer, ytd-reel-shelf-renderer').forEach(section => {
-            const title = section.querySelector('#title, h2, [role="heading"]')?.textContent?.trim().toLowerCase();
-            if (title && (title.includes('shorts') || title.includes('short'))) {
-                section.remove();
-                state.stats.shorts++;
-            }
-        });
-
-        // Remove individual Shorts in feed
-        document.querySelectorAll('ytd-rich-item-renderer, ytd-reel-item-renderer').forEach(item => {
-            // Check multiple indicators for Shorts
-            const isShort =
-                item.querySelector('[overlay-style="SHORTS"]') ||
-                item.querySelector('ytd-thumbnail-overlay-time-status-renderer')?.textContent?.includes('SHORTS') ||
-                item.querySelector('a[href*="/shorts/"]') ||
-                item.querySelector('[aria-label*="Shorts"]') ||
-                item.querySelector('[title*="Shorts"]') ||
-                // Check for reel-specific classes
-                item.classList.contains('ytd-reel-item-renderer') ||
-                // Check if the lockup contains shorts indicator
-                item.querySelector('.yt-lockup-view-model')?.className?.includes('shorts');
-
-            if (isShort) {
-                item.remove();
-                state.stats.shorts++;
-            }
-        });
-    }
-
-    // Remove videos watched over threshold
-    function removeWatchedVideos() {
-        document.querySelectorAll('ytd-rich-item-renderer').forEach(item => {
-            // Try multiple selectors for progress indicator
-            let progress = item.querySelector('#progress');
-            
-            // Fallback: look for progress in thumbnail overlays
-            if (!progress) {
-                progress = item.querySelector('ytd-thumbnail-overlay-resume-playback-renderer #progress, [id*="progress"]');
-            }
-            
-            if (progress) {
-                const width = parseFloat(progress.style.width);
-                if (width > CONFIG.OVERFLOW) {
-                    item.remove();
-                    state.stats.removed++;
-                }
-            }
-        });
-    }
-
-    // Extract video ID from various YouTube URL formats
     function extractVideoId(element) {
-        // Try new structure first (yt-lockup-view-model)
-        let link = element.querySelector('a.yt-lockup-view-model__content-image');
-        
-        // Fallback to old structure
-        if (!link) {
-            link = element.querySelector('a#thumbnail, a.yt-simple-endpoint, a[href*="/watch"]');
-        }
-        
+        const link = element.querySelector('a[href*="/watch"], a.yt-lockup-view-model__content-image');
         if (!link) return null;
-
         const href = link.getAttribute('href');
         if (!href) return null;
-
-        // Handle different URL formats
-        const patterns = [
-            /[?&]v=([^&]+)/,          // Regular watch URL
-            /\/shorts\/([^/?]+)/,      // Shorts URL
-            /\/embed\/([^/?]+)/,       // Embed URL
-            /youtu\.be\/([^/?]+)/      // Shortened URL
-        ];
-
-        for (const pattern of patterns) {
-            const match = href.match(pattern);
-            if (match) return match[1];
-        }
-
-        return null;
+        const match = href.match(/[?&]v=([^&]+)/);
+        return match ? match[1] : null;
     }
 
-    // Add blacklist buttons to videos
-    function processBlacklistButtons() {
-        document.querySelectorAll('ytd-rich-item-renderer').forEach(item => {
-            // Skip if already processed
-            if (state.processedVideos.has(item)) return;
-
-            const videoId = extractVideoId(item);
-            if (!videoId) return;
-
-            // Skip if already blacklisted
-            if (state.blacklist.has(videoId)) return;
-
-            // Check if button already exists
-            if (item.querySelector('.yt-helper-remove')) return;
-
-            const button = createBlacklistButton(videoId, item);
-
-            // Find the best position for the button (try new structure first)
-            let container = item.querySelector('a.yt-lockup-view-model__content-image');
-            
-            // Fallback to old structure
-            if (!container) {
-                container = item.querySelector('#thumbnail');
-            }
-            
-            // Last resort: use #dismissible or #content
-            if (!container) {
-                container = item.querySelector('#dismissible, #content');
-            }
-
-            if (container) {
-                container.style.position = 'relative';
-                container.appendChild(button);
-                state.processedVideos.add(item);
-            }
-        });
-    }
-
-    // Create blacklist button
-    function createBlacklistButton(videoId, itemElement) {
-        const button = document.createElement('button');
-        button.className = 'yt-helper-remove';
-        button.innerHTML = '✕';
-
-        Object.assign(button.style, {
-            position: 'absolute',
-            top: '8px',
-            right: '8px',
-            width: '28px',
-            height: '28px',
-            backgroundColor: 'rgba(205, 24, 24, 0.9)',
-            color: 'white',
-            border: 'none',
-            borderRadius: '50%',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            cursor: 'pointer',
-            zIndex: '10',
-            fontSize: '16px',
-            fontWeight: 'bold',
-            transition: 'all 0.2s ease',
-            boxShadow: '0 2px 4px rgba(0,0,0,0.3)'
-        });
-
-        // Hover effect
-        button.onmouseenter = () => {
-            button.style.backgroundColor = 'rgba(205, 24, 24, 1)';
-            button.style.transform = 'scale(1.1)';
-        };
-
-        button.onmouseleave = () => {
-            button.style.backgroundColor = 'rgba(205, 24, 24, 0.9)';
-            button.style.transform = 'scale(1)';
-        };
-
-        button.onclick = (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-
-            state.blacklist.add(videoId);
-            saveBlacklist();
-
-            // Fade out and remove
-            itemElement.style.transition = 'opacity 0.3s ease';
-            itemElement.style.opacity = '0';
-            setTimeout(() => itemElement.remove(), 300);
-
-            state.stats.blacklisted++;
-            console.log(`[YT Helper] Blacklisted video: ${videoId}`);
-        };
-
-        return button;
-    }
-
-    // Remove blacklisted videos
     function removeBlacklistedVideos() {
         if (state.blacklist.size === 0) return;
-
         document.querySelectorAll('ytd-rich-item-renderer').forEach(item => {
-            const videoId = extractVideoId(item);
-            if (videoId && state.blacklist.has(videoId)) {
-                item.remove();
-            }
+            const id = extractVideoId(item);
+            if (id && state.blacklist.has(id)) item.remove();
         });
     }
 
-    // Set video playback speed
-    async function setPlaybackSpeed(retries = 0) {
-        const video = document.querySelector('video.html5-main-video');
+    function addBlacklistButtons() {
+        document.querySelectorAll('ytd-rich-item-renderer').forEach(item => {
+            if (state.processedVideos.has(item)) return;
+            const id = extractVideoId(item);
+            if (!id || state.blacklist.has(id)) return;
+            if (item.querySelector('.yt-helper-remove')) return;
 
-        if (video) {
-            // Only set speed if no manual change has been made and extension is not paused
-            if (!state.manualSpeedChange && !state.extensionPaused) {
-                video.playbackRate = CONFIG.SPEED;
-                state.lastKnownSpeed = CONFIG.SPEED;
-            }
+            const container = item.querySelector(
+                'a.yt-lockup-view-model__content-image, a#thumbnail, #dismissible'
+            );
+            if (!container) return;
 
-            // Listen for rate changes to detect manual changes
-            if (!video.hasAttribute('data-speed-set')) {
-                video.setAttribute('data-speed-set', 'true');
-                video.addEventListener('ratechange', () => {
-                    // If the speed was changed to something other than our config speed
-                    // and we didn't just set it, mark as manual change
-                    if (video.playbackRate !== state.lastKnownSpeed && 
-                        video.playbackRate !== CONFIG.SPEED) {
-                        state.manualSpeedChange = true;
-                        console.log(`[YT Helper] Manual speed change detected: ${video.playbackRate}x`);
-                    }
-                });
-            }
-        } else if (retries < CONFIG.MAX_RETRIES) {
-            setTimeout(() => setPlaybackSpeed(retries + 1), CONFIG.CLEANUP_INTERVAL);
-        }
+            container.style.position = 'relative';
+
+            const btn = document.createElement('button');
+            btn.className = 'yt-helper-remove';
+            btn.textContent = '✕';
+            btn.title = 'Hide this video';
+            btn.onclick = (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                state.blacklist.add(id);
+                saveBlacklist();
+                item.style.transition = 'opacity 0.3s';
+                item.style.opacity = '0';
+                setTimeout(() => item.remove(), 300);
+                state.stats.blacklisted++;
+            };
+
+            container.appendChild(btn);
+            state.processedVideos.add(item);
+        });
     }
 
-    // Cleanup old data
-    function performInitialCleanup() {
-        const now = Date.now();
-        const lastCleanup = parseInt(localStorage.getItem(CONFIG.LAST_CLEANUP_KEY) || '0');
-        const daysSinceCleanup = (now - lastCleanup) / (1000 * 60 * 60 * 24);
-
-        if (daysSinceCleanup > 7) {
-            // Clean up old storage keys from previous version
-            for (let i = localStorage.length - 1; i >= 0; i--) {
-                const key = localStorage.key(i);
-                if (key && (key.startsWith('youtubeHelper-') || key.startsWith('ytHelper_')) &&
-                    key !== CONFIG.BLACKLIST_KEY && key !== CONFIG.LAST_CLEANUP_KEY) {
-                    localStorage.removeItem(key);
-                }
-            }
-
-            localStorage.setItem(CONFIG.LAST_CLEANUP_KEY, now.toString());
-            console.log('[YT Helper] Cleanup completed');
-        }
-    }
-
-    // Setup global functions for manual control
     function setupGlobalFunctions() {
         window.ytHelper = {
             clearBlacklist: () => {
                 state.blacklist.clear();
                 saveBlacklist();
+                processBlacklist();
                 console.log('[YT Helper] Blacklist cleared');
-                processPage();
             },
-
             removeFromBlacklist: (videoId) => {
                 if (state.blacklist.delete(videoId)) {
                     saveBlacklist();
-                    console.log(`[YT Helper] Removed ${videoId} from blacklist`);
-                    processPage();
+                    processBlacklist();
                 }
             },
-
             getBlacklist: () => [...state.blacklist],
-
             getStats: () => ({ ...state.stats }),
-
-            setSpeed: (speed) => {
-                CONFIG.SPEED = speed;
-                state.manualSpeedChange = false; // Reset manual change flag
-                state.lastKnownSpeed = speed;
-                setPlaybackSpeed();
-                console.log(`[YT Helper] Speed set to ${speed}x`);
-            },
-
-            resetSpeedControl: () => {
-                state.manualSpeedChange = false;
-                setPlaybackSpeed();
-                console.log('[YT Helper] Speed control reset');
-            },
-
             pauseExtension: () => {
                 state.extensionPaused = true;
-                console.log('[YT Helper] Extension paused for this page');
+                console.log('[YT Helper] Paused');
             },
-
             resumeExtension: () => {
                 state.extensionPaused = false;
-                processPage();
-                console.log('[YT Helper] Extension resumed');
+                processBlacklist();
+                console.log('[YT Helper] Resumed');
             },
-
             isPaused: () => state.extensionPaused,
-
-            isSpeedManual: () => state.manualSpeedChange,
-
             exportBlacklist: () => {
                 const data = JSON.stringify([...state.blacklist], null, 2);
                 const blob = new Blob([data], { type: 'application/json' });
@@ -456,35 +224,16 @@
                 a.click();
                 URL.revokeObjectURL(url);
             },
-
-            importBlacklist: async (file) => {
-                try {
-                    const text = await file.text();
-                    const ids = JSON.parse(text);
-                    ids.forEach(id => state.blacklist.add(id));
-                    saveBlacklist();
-                    console.log(`[YT Helper] Imported ${ids.length} video IDs`);
-                    processPage();
-                } catch (e) {
-                    console.error('[YT Helper] Import failed:', e);
-                }
+            importBlacklist: (fileContent) => {
+                const ids = JSON.parse(fileContent);
+                ids.forEach(id => state.blacklist.add(id));
+                saveBlacklist();
+                processBlacklist();
+                return ids.length;
             },
-
-            processPage: () => {
-                processPage();
-                console.log('[YT Helper] Page processing triggered');
-            },
-
-            getConfig: () => ({ ...CONFIG }),
-
-            setConfig: (key, value) => {
-                if (CONFIG.hasOwnProperty(key)) {
-                    CONFIG[key] = value;
-                    console.log(`[YT Helper] Config ${key} set to ${value}`);
-                }
-            }
+            processPage: () => processBlacklist()
         };
 
-        console.log('[YT Helper] Initialized. Use window.ytHelper for manual controls.');
+        console.log('[YT Helper] Ready. Use window.ytHelper for manual controls.');
     }
 })();
